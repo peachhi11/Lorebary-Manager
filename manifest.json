@@ -1,0 +1,11 @@
+{
+    "display_name": "Lorebary Manager",
+    "loading_order": 50,
+    "requires": [],
+    "optional": ["lorebary"],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Retired Hippie",
+    "version": "1.0.0",
+    "homePage": ""
+}

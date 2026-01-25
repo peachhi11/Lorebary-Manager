@@ -1,0 +1,58 @@
+.lorebary-manager-settings .extension_block {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 10px;
+    border-radius: 5px;
+    margin-bottom: 8px;
+}
+
+.lb-list-container {
+    background: var(--black50a);
+    border: 1px solid var(--grey30);
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 5px;
+    margin: 5px 0;
+}
+
+.lb-manager-row {
+    display: flex;
+    align-items: center;
+    padding: 4px;
+    border-bottom: 1px solid var(--white10a);
+}
+
+.lb-manager-row:last-child {
+    border-bottom: none;
+}
+
+.lb-item-name {
+    flex-grow: 1;
+    margin-left: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.9em;
+}
+
+.lb-item-actions {
+    margin-left: auto;
+    cursor: pointer;
+    color: var(--red50);
+}
+
+.lb-item-actions:hover {
+    color: var(--red);
+}
+
+.lb-controls-row {
+    display: flex;
+    justify-content: flex-end;
+    gap: 5px;
+    margin-top: 5px;
+}
+
+.lb-quick-actions {
+    gap: 5px;
+    margin-top: 5px;
+}
