@@ -2,10 +2,10 @@
     "display_name": "Lorebary Manager",
     "loading_order": 50,
     "requires": [],
-    "optional": ["lorebary"],
+    "optional": [],
     "js": "index.js",
     "css": "style.css",
-    "author": "Retired Hippie",
+    "author": "RetiredHippie",
     "version": "1.1.0",
     "homePage": ""
 }
