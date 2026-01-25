@@ -28,7 +28,7 @@ Use ST's inbuilt extension installer.
 2.  Navigate to **Extensions** > **Install Extension**.
 3.  Copy the link to this repository, paste it into the input box
 ```
-https://github.com/RetiredHippie/Lorebary-Manager/tree/main
+https://github.com/RetiredHippie/Lorebary-Manager
 ```
 4.  Click **Install**.
 
