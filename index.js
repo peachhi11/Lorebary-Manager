@@ -1,11 +1,10 @@
 import { extension_settings, getContext } from "../../../extensions.js";
-import { saveSettingsDebounced, processCommands } from "../../../../script.js";
+import { saveSettingsDebounced } from "../../../../script.js";
 
 // --- CONFIGURATION ---
 const extensionName = "Lorebary-Manager"; 
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
-// API Paths - We can try multiple variations if one fails
 const PROXY_PATHS = {
     SEARCH: "/search", 
     INSTALL: "/get",     
@@ -13,72 +12,84 @@ const PROXY_PATHS = {
 };
 
 const defaultSettings = {
-    installed_books: [] 
+    installed_books: [],
+    manual_url: "" // New setting for the override
 };
 
 // --- SAFE LOAD LOGIC ---
 
 async function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
-    if (Object.keys(extension_settings[extensionName]).length === 0) {
-        Object.assign(extension_settings[extensionName], defaultSettings);
+    // Merge defaults carefully
+    for (const key in defaultSettings) {
+        if (!extension_settings[extensionName].hasOwnProperty(key)) {
+            extension_settings[extensionName][key] = defaultSettings[key];
+        }
     }
+    
+    // UI: Pre-fill the manual URL box if saved
+    $("#lb_manual_url").val(extension_settings[extensionName].manual_url || "");
 }
 
-// --- PROXY CONNECTION (Debug Mode) ---
+// --- PROXY CONNECTION LOGIC ---
 
 function getActiveProxyConnection() {
+    // 1. PRIORITY: Check Manual Override
+    const manualUrl = $("#lb_manual_url").val().trim();
+    if (manualUrl) {
+        // We still need an API key. We'll try to grab it from OpenAI settings as a fallback.
+        const oai = window.oai_settings || {};
+        const key = oai.openai_key || ""; 
+        
+        // Sanitize URL
+        let cleanUrl = manualUrl;
+        if (cleanUrl.endsWith('/')) cleanUrl = cleanUrl.slice(0, -1);
+        if (cleanUrl.endsWith('/v1')) cleanUrl = cleanUrl.slice(0, -3);
+        
+        return { apiUrl: cleanUrl, apiKey: key, apiType: 'manual' };
+    }
+
+    // 2. FALLBACK: Auto-Detect (Original Logic)
     const context = getContext();
     const oai = window.oai_settings || {}; 
     const textgen = window.textgenerationwebui_settings || {};
     
     let apiUrl = "";
     let apiKey = "";
-    let apiType = context.main_api || "unknown";
-
-    // 1. OpenAI / Reverse Proxy
-    if (apiType === 'openai') {
-        apiUrl = oai.reverse_proxy || oai.openai_url;
+    
+    // Try to find ANY url
+    if (oai.reverse_proxy) {
+        apiUrl = oai.reverse_proxy;
         apiKey = oai.openai_key;
-    } 
-    // 2. TextGenWebUI
-    else if (apiType === 'textgenerationwebui') {
+    } else if (oai.openai_url) {
+        apiUrl = oai.openai_url;
+        apiKey = oai.openai_key;
+    } else if (textgen.api_server) {
         apiUrl = textgen.api_server;
         apiKey = textgen.api_key;
     }
-    // 3. KoboldAI
-    else if (apiType === 'kobold') {
-        apiUrl = context.kobold_url; 
-    }
 
-    // CLEANUP: Sanitize URL
-    if (apiUrl) {
-        if (apiUrl.endsWith('/')) apiUrl = apiUrl.slice(0, -1);
-        if (apiUrl.endsWith('/v1')) apiUrl = apiUrl.slice(0, -3); // Strip /v1 to get root
-    }
+    if (apiUrl && apiUrl.endsWith('/')) apiUrl = apiUrl.slice(0, -1);
+    if (apiUrl && apiUrl.endsWith('/v1')) apiUrl = apiUrl.slice(0, -3);
 
-    return { apiUrl, apiKey, apiType };
+    return { apiUrl, apiKey, apiType: 'auto' };
 }
 
 async function checkProxyStatus() {
     const { apiUrl, apiKey } = getActiveProxyConnection();
     const $status = $("#lb_connection_status");
 
-    // DEBUG: Log exactly what we found
-    console.log("[Lorebary Debug] Detected API URL:", apiUrl);
-    
     if (!apiUrl) {
-        $status.text("No Active API Connection").css("color", "red");
-        toastr.error("Could not find an active Proxy URL in ST settings.", "Lorebary Debug");
+        $status.text("No Proxy URL Configured").css("color", "red");
         return;
     }
 
     $status.text("Connecting...").css("color", "yellow");
 
-    const targetUrl = `${apiUrl}${PROXY_PATHS.STATUS}`;
-    console.log("[Lorebary Debug] Attempting Fetch:", targetUrl);
-
     try {
+        const targetUrl = `${apiUrl}${PROXY_PATHS.STATUS}`;
+        console.log("[Lorebary] Checking Status:", targetUrl);
+
         const response = await fetch(targetUrl, {
             method: 'GET',
             headers: {
@@ -88,19 +99,15 @@ async function checkProxyStatus() {
         });
 
         if (response.ok) {
-            $status.text("Connected via Proxy").css("color", "lightgreen");
-            toastr.success(`Connected!`, "Lorebary");
+            $status.text("Connected").css("color", "lightgreen");
+            toastr.success("Connected to Lorebary Proxy!", "Lorebary");
         } else {
-            console.warn(`[Lorebary Debug] HTTP Error ${response.status} on ${targetUrl}`);
-            $status.text(`Error: ${response.status} (Check Console)`).css("color", "orange");
-            toastr.warning(`Proxy reachable, but returned Error ${response.status}`, "Lorebary Debug");
+            console.warn(`[Lorebary] 404/Error on ${targetUrl}`);
+            $status.text("Proxy Active (Lorebary Endpoint Missing)").css("color", "orange");
         }
     } catch (err) {
-        console.error("[Lorebary Debug] Network Error:", err);
-        $status.text("Network Error (CORS?)").css("color", "red");
-        
-        // Detailed error for user
-        toastr.error(`Network Error. Likely CORS blocking the browser. URL: ${targetUrl}`, "Lorebary Debug");
+        console.warn("[Lorebary] Connection Failed:", err);
+        $status.text("Connection Failed (CORS?)").css("color", "red");
     }
 }
 
@@ -108,7 +115,7 @@ async function checkProxyStatus() {
 
 async function searchLorebary(query) {
     const { apiUrl, apiKey } = getActiveProxyConnection();
-    if (!apiUrl) return toastr.error("Not connected to a proxy.", "Lorebary");
+    if (!apiUrl) return toastr.error("Configure Proxy URL first.", "Lorebary");
 
     $("#lb_run_search").prop("disabled", true).text("Searching...");
 
@@ -119,7 +126,7 @@ async function searchLorebary(query) {
             headers: { 'Authorization': `Bearer ${apiKey}` }
         });
 
-        if (!response.ok) throw new Error(`Proxy Error: ${response.status}`);
+        if (!response.ok) throw new Error(`Status ${response.status}`);
         
         const results = await response.json();
         const list = Array.isArray(results) ? results : (results.results || []);
@@ -134,8 +141,14 @@ async function searchLorebary(query) {
     }
 }
 
+// --- UI EVENT HANDLERS ---
 
-// --- UI HANDLING ---
+function saveManualUrl() {
+    const url = $("#lb_manual_url").val().trim();
+    extension_settings[extensionName].manual_url = url;
+    saveSettingsDebounced();
+    checkProxyStatus(); // Re-check immediately
+}
 
 function refreshLibraryList() {
     const settings = extension_settings[extensionName];
@@ -143,7 +156,7 @@ function refreshLibraryList() {
     $container.empty();
 
     if (!settings.installed_books || settings.installed_books.length === 0) {
-        $container.append('<div class="lb-empty-state">No libraries installed via Proxy.</div>');
+        $container.append('<div class="lb-empty-state">No libraries installed.</div>');
         return;
     }
 
@@ -167,7 +180,6 @@ function handleSearchClick() {
     searchLorebary(query);
 }
 
-
 // --- INITIALIZATION ---
 
 jQuery(async () => {
@@ -176,18 +188,17 @@ jQuery(async () => {
         $("#extensions_settings").append(settingsHtml);
         await loadSettings();
 
-        // Bind Listeners
+        // Listeners
         $("#lb_refresh_list").on("click", () => { checkProxyStatus(); refreshLibraryList(); });
+        $("#lb_save_manual").on("click", saveManualUrl);
         $("#lb_run_search").on("click", handleSearchClick);
         $("#lb_search_query").on("keypress", (e) => { if(e.which === 13) handleSearchClick(); });
 
-        // Wait a moment for ST to load settings, then check
         setTimeout(checkProxyStatus, 2000); 
         refreshLibraryList();
 
-        console.log("Lorebary-Manager: Loaded Successfully");
-    } catch (criticalError) {
-        console.error("Lorebary-Manager CRITICAL LOAD ERROR:", criticalError);
-        toastr.error("Lorebary failed to load (Check Console)", "Extension Error");
+        console.log("Lorebary-Manager: Loaded");
+    } catch (e) {
+        console.error("Lorebary-Manager Error:", e);
     }
 });
