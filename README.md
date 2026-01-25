@@ -4,7 +4,7 @@
 
 This extension brings the functionality of [Lorebary](https://lorebary.com/) directly into the SillyTavern chat interface. It serves as a bridge, allowing you to manage libraries, toggle content, and execute commands without leaving your conversation.
 
-![Version](https://img.shields.io/badge/Version-1.0.0-blue) ![SillyTavern](https://img.shields.io/badge/SillyTavern-Extension-orange) ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-1.1.0-blue) ![SillyTavern](https://img.shields.io/badge/SillyTavern-Extension-orange) ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
