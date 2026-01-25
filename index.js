@@ -1,7 +1,7 @@
 import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
 
-const extensionName = "st-lorebary-manager";
+const extensionName = "Lorebary-Manager";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
 // Default settings for your manager
@@ -91,4 +91,5 @@ jQuery(async () => {
 
     // Initial check for Lorebary
     setTimeout(refreshLorebaryUI, 1000); // Small delay to ensure other extensions loaded
+
 });
