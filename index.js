@@ -1,20 +1,17 @@
 import { extension_settings, getContext } from "../../../extensions.js";
-import { saveSettingsDebounced, processCommands, saveWorldInfo } from "../../../../script.js";
-import { textgenerationwebui_settings as textgen_settings, oai_settings } from "../../../../script.js";
+import { saveSettingsDebounced, processCommands } from "../../../../script.js";
 
-// MATCH THIS TO YOUR FOLDER NAME
+// MATCH THIS TO YOUR FOLDER NAME EXACTLY
 const extensionName = "Lorebary-Manager"; 
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
-// CONFIG: Relative paths for the Lorebary Proxy API
-// Edit these if the proxy uses different endpoints
+// API CONFIG
 const PROXY_ENDPOINTS = {
-    SEARCH: "/lorebary/api/search",  // Example: proxy.com/lorebary/api/search
-    INSTALL: "/lorebary/api/get",    // Example: proxy.com/lorebary/api/get
-    STATUS: "/lorebary/api/status"   // Heartbeat check
+    SEARCH: "/lorebary/api/search", 
+    INSTALL: "/lorebary/api/get",
+    STATUS: "/lorebary/api/status" 
 };
 
-// Default Settings
 const defaultSettings = {
     installed_books: [] 
 };
@@ -26,37 +23,32 @@ async function loadSettings() {
     }
 }
 
-// --- PROXY CONNECTION HOOK ---
+// --- PROXY CONNECTION HOOK (SAFE VERSION) ---
 
-/**
- * Snoops ST settings to find the active Proxy URL and Key.
- * Supports OpenAI (Chat Completion) and TextGenWebUI sources.
- */
 function getActiveProxyConnection() {
     const context = getContext();
-    const apiType = context.main_api; // 'openai', 'textgenerationwebui', 'kobold', etc.
+    
+    // We access globals attached to the window object to avoid import crashes
+    // If these don't exist in your version, it returns safe defaults.
+    const oai = window.oai_settings || {}; 
+    const textgen = window.textgenerationwebui_settings || {};
     
     let apiUrl = "";
     let apiKey = "";
+    let apiType = context.main_api || "unknown";
 
-    // Hook into OpenAI Compatible settings (Common for Proxies)
     if (apiType === 'openai') {
-        apiUrl = oai_settings.reverse_proxy || oai_settings.openai_url;
-        apiKey = oai_settings.openai_key;
+        apiUrl = oai.reverse_proxy || oai.openai_url;
+        apiKey = oai.openai_key;
     } 
-    // Hook into TextGenWebUI settings
     else if (apiType === 'textgenerationwebui') {
-        apiUrl = textgen_settings.api_server;
-        apiKey = textgen_settings.api_key; // often unused, but good to have
+        apiUrl = textgen.api_server;
+        apiKey = textgen.api_key;
     }
-    // Hook into KoboldAI settings
     else if (apiType === 'kobold') {
         apiUrl = context.kobold_url; 
-        // Kobold usually puts the key in the headers automatically, 
-        // but we might need to grab it if stored in a setting.
     }
 
-    // Clean up URL (remove trailing slash)
     if (apiUrl && apiUrl.endsWith('/')) {
         apiUrl = apiUrl.slice(0, -1);
     }
@@ -64,9 +56,6 @@ function getActiveProxyConnection() {
     return { apiUrl, apiKey, apiType };
 }
 
-/**
- * Validates connectivity to the Lorebary subsystem on the proxy
- */
 async function checkProxyStatus() {
     const { apiUrl, apiKey } = getActiveProxyConnection();
     const $status = $("#lb_connection_status");
@@ -79,7 +68,6 @@ async function checkProxyStatus() {
     $status.text("Connecting to Proxy...").css("color", "yellow");
 
     try {
-        // We ping the status endpoint to see if this proxy supports Lorebary
         const response = await fetch(`${apiUrl}${PROXY_ENDPOINTS.STATUS}`, {
             method: 'GET',
             headers: {
@@ -92,22 +80,18 @@ async function checkProxyStatus() {
             $status.text("Connected via Proxy").css("color", "lightgreen");
             return true;
         } else {
-            // If 404, the proxy works but doesn't have Lorebary endpoints
-            $status.text("Proxy Connected (No Lorebary Support Detected)").css("color", "orange");
+            $status.text("Proxy Connected (No Lorebary Support)").css("color", "orange");
             return false;
         }
     } catch (err) {
-        console.error("Lorebary Handshake Failed:", err);
+        console.warn("Lorebary Handshake Failed:", err);
         $status.text("Proxy Connection Failed").css("color", "red");
         return false;
     }
 }
 
-// --- API ACTIONS ---
+// --- CORE ACTIONS ---
 
-/**
- * Search the Lorebary library via the Proxy
- */
 async function searchLorebary(query) {
     const { apiUrl, apiKey } = getActiveProxyConnection();
     if (!apiUrl) return toastr.error("Not connected to a proxy.", "Lorebary");
@@ -117,19 +101,14 @@ async function searchLorebary(query) {
     try {
         const response = await fetch(`${apiUrl}${PROXY_ENDPOINTS.SEARCH}?q=${encodeURIComponent(query)}`, {
             method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json'
-            }
+            headers: { 'Authorization': `Bearer ${apiKey}` }
         });
 
         if (!response.ok) throw new Error(`Proxy Error: ${response.status}`);
-
         const results = await response.json();
-        // Assume results is an array of { name, id, description }
-        // For now, we just pick the first one to simulate 'Import' behavior or log it
+        
         console.log("Search Results:", results);
-        toastr.success(`Found ${results.length} results (Check Console)`, "Lorebary");
+        toastr.success(`Found ${results.length} results (See Console)`, "Lorebary");
         
     } catch (err) {
         toastr.error(`Search Failed: ${err.message}`, "Lorebary");
@@ -138,43 +117,12 @@ async function searchLorebary(query) {
     }
 }
 
-/**
- * Downloads a Lorebook via the Proxy (bypassing CORS/Auth issues)
- */
 async function installFromProxy(bookId) {
-    const { apiUrl, apiKey } = getActiveProxyConnection();
-    
-    try {
-        toastr.info("Requesting Lorebook from Proxy...", "Lorebary");
-        
-        const response = await fetch(`${apiUrl}${PROXY_ENDPOINTS.INSTALL}/${bookId}`, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`
-            }
-        });
-
-        if (!response.ok) throw new Error("Download failed");
-        
-        const data = await response.json();
-        const bookName = data.name || `Lorebary-${bookId}`;
-
-        // Save to SillyTavern
-        await saveWorldInfo(bookName, data, false);
-
-        // Update Extension Settings
-        const settings = extension_settings[extensionName];
-        if (!settings.installed_books.find(b => b.name === bookName)) {
-            settings.installed_books.push({ name: bookName, source_id: bookId, enabled: true });
-            saveSettingsDebounced();
-        }
-
-        toastr.success(`Installed: ${bookName}`, "Lorebary");
-        refreshLibraryList();
-
-    } catch (err) {
-        toastr.error(err.message, "Lorebary Install Error");
-    }
+    // Placeholder for install logic using slash commands to avoid direct saveWorldInfo dependency
+    // which was crashing the previous version.
+    const command = `/create-world-info entry name="Lorebary-${bookId}"`;
+    await processCommands(command);
+    toastr.info("Created empty World Info (Import logic WIP)", "Lorebary");
 }
 
 
@@ -207,57 +155,27 @@ function refreshLibraryList() {
 function handleSearchClick() {
     const query = $("#lb_search_query").val().trim();
     if (!query) return;
-    
-    // For now, trigger search
     searchLorebary(query);
 }
-
-function handleToggle(event) {
-    const index = $(event.target).data('index');
-    const enabled = $(event.target).prop('checked');
-    const settings = extension_settings[extensionName];
-
-    if (settings.installed_books[index]) {
-        settings.installed_books[index].enabled = enabled;
-        saveSettingsDebounced();
-        toastr.success(`${settings.installed_books[index].name} ${enabled ? 'Enabled' : 'Disabled'}`);
-    }
-}
-
-function handleDelete(event) {
-    const index = $(event.target).data('index');
-    const settings = extension_settings[extensionName];
-    
-    if (!confirm(`Remove ${settings.installed_books[index].name}?`)) return;
-
-    settings.installed_books.splice(index, 1);
-    saveSettingsDebounced();
-    refreshLibraryList();
-}
-
 
 // --- INITIALIZATION ---
 
 jQuery(async () => {
-    // Load Settings HTML
-    const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
-    $("#extensions_settings").append(settingsHtml);
+    // Safely load HTML
+    try {
+        const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
+        $("#extensions_settings").append(settingsHtml);
+    } catch (e) {
+        console.error("Lorebary: Failed to load settings.html", e);
+        return;
+    }
 
-    // Initial Setup
     await loadSettings();
-
-    // Check Proxy Connection immediately
     setTimeout(checkProxyStatus, 2000); 
 
-    // Event Listeners
-    $("#lb_refresh_list").on("click", () => { 
-        checkProxyStatus(); 
-        refreshLibraryList(); 
-    });
-
+    // Listeners
+    $("#lb_refresh_list").on("click", () => { checkProxyStatus(); refreshLibraryList(); });
     $("#lb_run_search").on("click", handleSearchClick);
-    $(document).on("change", ".lb-item-toggle", handleToggle);
-    $(document).on("click", ".lb-delete-item", handleDelete);
     
     $("#lb_search_query").on("keypress", (e) => {
         if(e.which === 13) handleSearchClick();
