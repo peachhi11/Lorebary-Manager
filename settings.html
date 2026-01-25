@@ -7,31 +7,35 @@
         <div class="inline-drawer-content">
             
             <div class="extension_block">
-                <small>Lorebary Status: <span id="lb_connection_status">Checking...</span></small>
+                <small>Status: <span id="lb_connection_status">Checking...</span></small>
+            </div>
+
+            <div class="extension_block">
+                <div class="menu_text"><b>Proxy Configuration</b></div>
+                <small>If auto-detect fails, paste your proxy URL here (e.g., <i>https://api.lorebary.com/openai</i>).</small>
+                <input id="lb_manual_url" class="text_pole" type="text" placeholder="Auto-detect (Default)" />
+                <div class="flex-container" style="justify-content: flex-end; margin-top: 5px;">
+                     <button id="lb_save_manual" class="menu_button fa fa-save" title="Save URL"></button>
+                </div>
             </div>
 
             <div class="extension_block">
                 <div class="menu_text"><b>Installed Libraries:</b></div>
                 <div id="lorebary_installed_list" class="lb-list-container">
-                    <div class="lb-empty-state">No libraries detected (or Lorebary not loaded).</div>
+                    <div class="lb-empty-state">No libraries detected.</div>
                 </div>
                 <div class="lb-controls-row">
                     <button id="lb_refresh_list" class="menu_button fa fa-sync" title="Refresh List"></button>
-                    <button id="lb_save_config" class="menu_button fa fa-save" title="Force Save Config"></button>
                 </div>
             </div>
 
             <hr class="sysHR" />
 
             <div class="extension_block">
-                <div class="menu_text"><b>Command Runner:</b></div>
+                <div class="menu_text"><b>Search / Import:</b></div>
                 <div class="flex-container">
-                    <input id="lb_search_query" class="text_pole" type="text" placeholder="Search term (e.g. 'fantasy')" />
+                    <input id="lb_search_query" class="text_pole" type="text" placeholder="Search term..." />
                     <button id="lb_run_search" class="menu_button">Search</button>
-                </div>
-                <div class="lb-quick-actions flex-container">
-                    <button id="lb_cmd_update" class="menu_button" title="Update all">Update All</button>
-                    <button id="lb_cmd_help" class="menu_button" title="Show Help">Help</button>
                 </div>
             </div>
 
