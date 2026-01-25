@@ -1,5 +1,5 @@
 import { extension_settings, getContext } from "../../../extensions.js";
-import { saveSettingsDebounced, saveWorldInfo } from "../../../../script.js";
+import { saveSettingsDebounced } from "../../../../script.js";
 
 // --- CONFIGURATION ---
 const extensionName = "Lorebary-Manager"; 
@@ -16,7 +16,37 @@ const defaultSettings = {
     manual_url: "" 
 };
 
-// --- SAFE LOAD LOGIC ---
+// --- HELPERS ---
+
+function cleanUrl(url) {
+    if (!url) return "";
+    if (url.endsWith('/')) url = url.slice(0, -1);
+    if (url.endsWith('/v1')) url = url.slice(0, -3);
+    return url;
+}
+
+/**
+ * INTELLIGENT URL SPLITTER
+ * Separates the Chat URL (e.g. .../openrouter) from the Search URL (root).
+ */
+function getEndpoints(apiUrl) {
+    // 1. Chat/Status URL (Keep as is)
+    const chatUrl = apiUrl;
+
+    // 2. Search URL (Try to strip the provider path)
+    let searchUrl = apiUrl;
+    const providers = ['/openai', '/openrouter', '/claude', '/scale', '/anthropic'];
+    
+    for (const p of providers) {
+        if (searchUrl.toLowerCase().endsWith(p)) {
+            searchUrl = searchUrl.slice(0, -p.length);
+            break; 
+        }
+    }
+    return { chatUrl, searchUrl };
+}
+
+// --- CONNECTION LOGIC ---
 
 async function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
@@ -25,17 +55,18 @@ async function loadSettings() {
             extension_settings[extensionName][key] = defaultSettings[key];
         }
     }
-    $("#lb_manual_url").val(extension_settings[extensionName].manual_url || "");
+    // Safe jQuery check
+    if ($("#lb_manual_url").length) {
+        $("#lb_manual_url").val(extension_settings[extensionName].manual_url || "");
+    }
 }
-
-// --- CONNECTION HELPERS ---
 
 function getActiveProxyConnection() {
     // 1. Manual Override
-    const manualUrl = $("#lb_manual_url").val().trim();
-    if (manualUrl) {
+    const manualUrl = $("#lb_manual_url").val(); // .val() can be undefined if element missing
+    if (manualUrl && manualUrl.trim()) {
         const oai = window.oai_settings || {};
-        return { apiUrl: cleanUrl(manualUrl), apiKey: oai.openai_key || "", apiType: 'manual' };
+        return { apiUrl: cleanUrl(manualUrl.trim()), apiKey: oai.openai_key || "", apiType: 'manual' };
     }
 
     // 2. Auto-Detect
@@ -51,38 +82,6 @@ function getActiveProxyConnection() {
     return { apiUrl: cleanUrl(apiUrl), apiKey: oai.openai_key || "", apiType: 'auto' };
 }
 
-function cleanUrl(url) {
-    if (!url) return "";
-    if (url.endsWith('/')) url = url.slice(0, -1);
-    if (url.endsWith('/v1')) url = url.slice(0, -3);
-    return url;
-}
-
-/**
- * INTELLIGENT URL SPLITTER
- * The Chat proxy might be at .../openrouter, but the Search API is likely at the root.
- */
-function getEndpoints(apiUrl) {
-    // 1. Chat/Status URL (Keep as is)
-    const chatUrl = apiUrl;
-
-    // 2. Search URL (Try to strip the provider path)
-    // Common providers to strip: /openai, /openrouter, /claude, /scale
-    let searchUrl = apiUrl;
-    const providers = ['/openai', '/openrouter', '/claude', '/scale', '/anthropic'];
-    
-    for (const p of providers) {
-        if (searchUrl.toLowerCase().endsWith(p)) {
-            searchUrl = searchUrl.slice(0, -p.length);
-            break; // Stop after removing the first match
-        }
-    }
-
-    return { chatUrl, searchUrl };
-}
-
-// --- CORE LOGIC ---
-
 async function checkProxyStatus() {
     const { apiUrl, apiKey } = getActiveProxyConnection();
     const $status = $("#lb_connection_status");
@@ -95,7 +94,6 @@ async function checkProxyStatus() {
     $status.text("Connecting...").css("color", "yellow");
 
     try {
-        // We check status against the CHAT URL (because that's what validates the key)
         const targetUrl = `${apiUrl}${PROXY_PATHS.STATUS}`;
         const response = await fetch(targetUrl, {
             method: 'GET',
@@ -107,16 +105,19 @@ async function checkProxyStatus() {
 
         if (response.ok) {
             $status.text("Connected").css("color", "lightgreen");
-            toastr.success("Connected to Lorebary Proxy!", "Lorebary");
+            toastr.success("Lorebary Connected!");
         } else {
+            // This is a "Soft Error" - Connection is good, but path might be wrong.
             console.warn(`[Lorebary] Status Check Failed: ${response.status}`);
-            $status.text("Proxy Reachable (Auth/Endpoint Error)").css("color", "orange");
+            $status.text("Proxy Active (Endpoint Error)").css("color", "orange");
         }
     } catch (err) {
         console.warn("[Lorebary] Connection Failed:", err);
         $status.text("Connection Failed").css("color", "red");
     }
 }
+
+// --- SEARCH & INSTALL ---
 
 async function searchLorebary(query) {
     const { apiUrl, apiKey } = getActiveProxyConnection();
@@ -128,7 +129,6 @@ async function searchLorebary(query) {
     const { searchUrl } = getEndpoints(apiUrl);
     
     try {
-        // Construct: https://api.lorebary.com/search (instead of .../openrouter/search)
         const targetUrl = `${searchUrl}${PROXY_PATHS.SEARCH}?q=${encodeURIComponent(query)}`;
         console.log(`[Lorebary] Search Target: ${targetUrl}`);
 
@@ -139,7 +139,10 @@ async function searchLorebary(query) {
 
         const rawText = await response.text();
         
-        if (!response.ok) throw new Error(`Server returned ${response.status}`);
+        if (!response.ok) {
+            console.error("Lorebary Search Error:", rawText);
+            throw new Error(`Server returned ${response.status}`);
+        }
 
         try {
             const results = JSON.parse(rawText);
@@ -149,10 +152,9 @@ async function searchLorebary(query) {
             else toastr.success(`Found ${list.length} results`, "Lorebary");
             
             console.log("[Lorebary] Results:", list);
-            // Here we would normally render the results to the UI...
             
         } catch (jsonError) {
-            console.error("JSON Error. Raw:", rawText);
+            console.error("JSON Parse Error:", rawText);
             throw new Error("Invalid API Response (Still HTML?). Check Console.");
         }
         
@@ -181,18 +183,10 @@ function refreshLibraryList() {
         $container.append('<div class="lb-empty-state">No libraries installed.</div>');
         return;
     }
-
+    
+    // Simple render of list
     settings.installed_books.forEach((book, index) => {
-        const $row = $(`
-            <div class="lb-manager-row flex-container">
-                <input type="checkbox" class="lb-item-toggle" data-index="${index}" ${book.enabled ? 'checked' : ''} />
-                <span class="lb-item-name" title="${book.name}">${book.name}</span>
-                <div class="lb-item-actions">
-                     <i class="fa-solid fa-trash lb-delete-item" data-index="${index}" title="Remove"></i>
-                </div>
-            </div>
-        `);
-        $container.append($row);
+        $container.append(`<div class="lb-manager-row">${book.name}</div>`);
     });
     toastr.success("List refreshed.");
 }
@@ -207,20 +201,26 @@ function handleSearchClick() {
 
 jQuery(async () => {
     try {
+        // Safe HTML Load
         const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
         $("#extensions_settings").append(settingsHtml);
+        
         await loadSettings();
 
+        // Listeners
         $("#lb_refresh_list").on("click", refreshLibraryList);
         $("#lb_save_manual").on("click", saveManualUrl);
         $("#lb_run_search").on("click", handleSearchClick);
         $("#lb_search_query").on("keypress", (e) => { if(e.which === 13) handleSearchClick(); });
 
+        // Delayed Connect
         setTimeout(checkProxyStatus, 2000); 
         refreshLibraryList();
 
-        console.log("Lorebary-Manager: Loaded");
+        console.log("Lorebary-Manager: Loaded Successfully");
+
     } catch (e) {
-        console.error("Lorebary-Manager Error:", e);
+        console.error("Lorebary-Manager CRITICAL ERROR:", e);
+        toastr.error("Extension failed to load.");
     }
 });
