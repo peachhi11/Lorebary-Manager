@@ -1,5 +1,5 @@
 import { extension_settings, getContext } from "../../../extensions.js";
-import { saveSettingsDebounced } from "../../../../script.js";
+import { saveSettingsDebounced, saveWorldInfo } from "../../../../script.js";
 
 // --- CONFIGURATION ---
 const extensionName = "Lorebary-Manager"; 
@@ -28,44 +28,60 @@ async function loadSettings() {
     $("#lb_manual_url").val(extension_settings[extensionName].manual_url || "");
 }
 
-// --- PROXY CONNECTION LOGIC ---
+// --- CONNECTION HELPERS ---
 
 function getActiveProxyConnection() {
-    // 1. Check Manual Override
+    // 1. Manual Override
     const manualUrl = $("#lb_manual_url").val().trim();
     if (manualUrl) {
         const oai = window.oai_settings || {};
-        const key = oai.openai_key || ""; 
-        let cleanUrl = manualUrl;
-        if (cleanUrl.endsWith('/')) cleanUrl = cleanUrl.slice(0, -1);
-        if (cleanUrl.endsWith('/v1')) cleanUrl = cleanUrl.slice(0, -3);
-        return { apiUrl: cleanUrl, apiKey: key, apiType: 'manual' };
+        return { apiUrl: cleanUrl(manualUrl), apiKey: oai.openai_key || "", apiType: 'manual' };
     }
 
-    // 2. Auto-Detect Fallback
+    // 2. Auto-Detect
     const context = getContext();
     const oai = window.oai_settings || {}; 
     const textgen = window.textgenerationwebui_settings || {};
     
     let apiUrl = "";
-    let apiKey = "";
+    if (oai.reverse_proxy) apiUrl = oai.reverse_proxy;
+    else if (oai.openai_url) apiUrl = oai.openai_url;
+    else if (textgen.api_server) apiUrl = textgen.api_server;
+
+    return { apiUrl: cleanUrl(apiUrl), apiKey: oai.openai_key || "", apiType: 'auto' };
+}
+
+function cleanUrl(url) {
+    if (!url) return "";
+    if (url.endsWith('/')) url = url.slice(0, -1);
+    if (url.endsWith('/v1')) url = url.slice(0, -3);
+    return url;
+}
+
+/**
+ * INTELLIGENT URL SPLITTER
+ * The Chat proxy might be at .../openrouter, but the Search API is likely at the root.
+ */
+function getEndpoints(apiUrl) {
+    // 1. Chat/Status URL (Keep as is)
+    const chatUrl = apiUrl;
+
+    // 2. Search URL (Try to strip the provider path)
+    // Common providers to strip: /openai, /openrouter, /claude, /scale
+    let searchUrl = apiUrl;
+    const providers = ['/openai', '/openrouter', '/claude', '/scale', '/anthropic'];
     
-    if (oai.reverse_proxy) {
-        apiUrl = oai.reverse_proxy;
-        apiKey = oai.openai_key;
-    } else if (oai.openai_url) {
-        apiUrl = oai.openai_url;
-        apiKey = oai.openai_key;
-    } else if (textgen.api_server) {
-        apiUrl = textgen.api_server;
-        apiKey = textgen.api_key;
+    for (const p of providers) {
+        if (searchUrl.toLowerCase().endsWith(p)) {
+            searchUrl = searchUrl.slice(0, -p.length);
+            break; // Stop after removing the first match
+        }
     }
 
-    if (apiUrl && apiUrl.endsWith('/')) apiUrl = apiUrl.slice(0, -1);
-    if (apiUrl && apiUrl.endsWith('/v1')) apiUrl = apiUrl.slice(0, -3);
-
-    return { apiUrl, apiKey, apiType: 'auto' };
+    return { chatUrl, searchUrl };
 }
+
+// --- CORE LOGIC ---
 
 async function checkProxyStatus() {
     const { apiUrl, apiKey } = getActiveProxyConnection();
@@ -79,6 +95,7 @@ async function checkProxyStatus() {
     $status.text("Connecting...").css("color", "yellow");
 
     try {
+        // We check status against the CHAT URL (because that's what validates the key)
         const targetUrl = `${apiUrl}${PROXY_PATHS.STATUS}`;
         const response = await fetch(targetUrl, {
             method: 'GET',
@@ -93,7 +110,7 @@ async function checkProxyStatus() {
             toastr.success("Connected to Lorebary Proxy!", "Lorebary");
         } else {
             console.warn(`[Lorebary] Status Check Failed: ${response.status}`);
-            $status.text("Proxy Active (Endpoint Error)").css("color", "orange");
+            $status.text("Proxy Reachable (Auth/Endpoint Error)").css("color", "orange");
         }
     } catch (err) {
         console.warn("[Lorebary] Connection Failed:", err);
@@ -101,30 +118,28 @@ async function checkProxyStatus() {
     }
 }
 
-// --- ACTIONS ---
-
 async function searchLorebary(query) {
     const { apiUrl, apiKey } = getActiveProxyConnection();
     if (!apiUrl) return toastr.error("Configure Proxy URL first.", "Lorebary");
 
     $("#lb_run_search").prop("disabled", true).text("Searching...");
 
+    // USE THE SMART ENDPOINT
+    const { searchUrl } = getEndpoints(apiUrl);
+    
     try {
-        const url = `${apiUrl}${PROXY_PATHS.SEARCH}?q=${encodeURIComponent(query)}`;
-        console.log(`[Lorebary] Requesting: ${url}`);
+        // Construct: https://api.lorebary.com/search (instead of .../openrouter/search)
+        const targetUrl = `${searchUrl}${PROXY_PATHS.SEARCH}?q=${encodeURIComponent(query)}`;
+        console.log(`[Lorebary] Search Target: ${targetUrl}`);
 
-        const response = await fetch(url, {
+        const response = await fetch(targetUrl, {
             method: 'GET',
             headers: { 'Authorization': `Bearer ${apiKey}` }
         });
 
-        // --- DEBUGGING FIX: Read text first, then parse ---
         const rawText = await response.text();
         
-        if (!response.ok) {
-            console.error("[Lorebary] Server Error Response:", rawText);
-            throw new Error(`Server returned ${response.status}. Check Console.`);
-        }
+        if (!response.ok) throw new Error(`Server returned ${response.status}`);
 
         try {
             const results = JSON.parse(rawText);
@@ -133,22 +148,22 @@ async function searchLorebary(query) {
             if(list.length === 0) toastr.info("No results found.");
             else toastr.success(`Found ${list.length} results`, "Lorebary");
             
-            // Log results to console for now
-            console.log("[Lorebary] Search Results:", list);
-
+            console.log("[Lorebary] Results:", list);
+            // Here we would normally render the results to the UI...
+            
         } catch (jsonError) {
-            console.error("[Lorebary] JSON Parse Error. Raw response was:", rawText);
-            throw new Error("Server returned invalid JSON (HTML?). Check Console.");
+            console.error("JSON Error. Raw:", rawText);
+            throw new Error("Invalid API Response (Still HTML?). Check Console.");
         }
         
     } catch (err) {
-        toastr.error(`${err.message}`, "Lorebary Error");
+        toastr.error(`${err.message}`, "Search Error");
     } finally {
         $("#lb_run_search").prop("disabled", false).text("Search");
     }
 }
 
-// --- UI EVENT HANDLERS ---
+// --- UI HANDLERS ---
 
 function saveManualUrl() {
     const url = $("#lb_manual_url").val().trim();
@@ -158,7 +173,6 @@ function saveManualUrl() {
 }
 
 function refreshLibraryList() {
-    // FIX: Only refreshes the UI list, does NOT re-run checkProxyStatus()
     const settings = extension_settings[extensionName];
     const $container = $("#lorebary_installed_list");
     $container.empty();
@@ -180,8 +194,7 @@ function refreshLibraryList() {
         `);
         $container.append($row);
     });
-    
-    toastr.success("Library list refreshed.");
+    toastr.success("List refreshed.");
 }
 
 function handleSearchClick() {
@@ -198,13 +211,11 @@ jQuery(async () => {
         $("#extensions_settings").append(settingsHtml);
         await loadSettings();
 
-        // Listeners
-        $("#lb_refresh_list").on("click", refreshLibraryList); // Just refresh list
-        $("#lb_save_manual").on("click", saveManualUrl);     // Save & Connect
+        $("#lb_refresh_list").on("click", refreshLibraryList);
+        $("#lb_save_manual").on("click", saveManualUrl);
         $("#lb_run_search").on("click", handleSearchClick);
         $("#lb_search_query").on("keypress", (e) => { if(e.which === 13) handleSearchClick(); });
 
-        // Connect once on load
         setTimeout(checkProxyStatus, 2000); 
         refreshLibraryList();
 
